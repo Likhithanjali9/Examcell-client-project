@@ -40,8 +40,24 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 
 '''-----------------------------------------------------------'''
+#------------- role names for coe and faculty for active log-------------------
+def get_user_label(user):
+    if not user:
+        return "System"
+
+    if user.role == "coe":
+        return "COE"
+
+    if user.role == "faculty":
+        faculty = Faculty.objects.filter(user=user).first()
+        if faculty:
+            return f"{faculty.level} Faculty"
+        return "Faculty"
+
+    return "User"
 
 
+#------------------------------------------------------------------------------
 # order of progression
 LEVEL_ORDER = ["PUC1", "PUC2", "E1", "E2", "E3", "E4"]
 
@@ -425,10 +441,12 @@ def faculty_login(request):
         if user.check_password(password):
             from rest_framework_simplejwt.tokens import RefreshToken
             refresh = RefreshToken.for_user(user)
+            faculty = Faculty.objects.filter(user=user).first()
             return Response({
                 "access": str(refresh.access_token),
                 "refresh": str(refresh),
-                "role": "faculty"
+                "role": "faculty",
+                "level": faculty.level if faculty else None
             })
         else:
             return Response({'error': 'Invalid password'}, status=status.HTTP_401_UNAUTHORIZED)
@@ -594,6 +612,7 @@ def list_marks(request):
             "subject_type": m.enrollment.subject.subject_type,
             "exam_scheme": m.enrollment.subject.exam_scheme,
             "credits": m.enrollment.subject.credits,
+            "level": m.enrollment.subject.level,
 
             # THEORY FIELDS
             "mid1": m.mid1,
@@ -897,9 +916,10 @@ def save_marks(request):
     batch = marks.enrollment.batch
     semester = marks.enrollment.semester
 
+    user_label = get_user_label(request.user)
     ActivityLog.objects.create(
         action_type="MARK_UPDATE",
-        description=f"{batch.current_level} {semester} {subject.code} updated",
+        description=f"{batch.current_level} {semester} {subject.code} {subject.name} marks updated by {user_label}",
         batch=batch,
         subject=subject,
         level=batch.current_level,
@@ -1388,50 +1408,119 @@ def update_subject(request, subject_id):
     return Response({"message": "Subject updated successfully"})
 
 #----------------BULK UPLODE FUNCTION FOR THE MARKS ENTRY-------------------------
+
 @api_view(["POST"])
+@permission_classes([IsAuthenticated])
 def bulk_upload_marks(request):
+    import csv
+
     file = request.FILES.get("file")
     subject_code = request.data.get("subject")
-    level = request.data.get("level")
     semester = request.data.get("semester")
+    batch_id = request.data.get("batch")
+
+    subject = Subject.objects.filter(code=subject_code).first()
 
     if not file:
         return Response({"error": "File required"}, status=400)
 
-    import csv
-    decoded_file = file.read().decode("utf-8").splitlines()
-    reader = csv.DictReader(decoded_file)
+    # Read CSV
+    #decoded = file.read().decode("utf-8").splitlines()
+    decoded = file.read().decode("utf-8-sig").splitlines()
+    reader = csv.DictReader(decoded)
+
+    # Clean column names
+    reader.fieldnames = [field.strip() for field in reader.fieldnames]
+
+    # Detect student_id column flexibly
+    student_key = None
+
+    for key in reader.fieldnames:
+        cleaned = key.strip().lower().replace(" ", "").replace("_", "")
+        if cleaned == "studentid":
+            student_key = key
+            break
+
+    if not student_key:
+        return Response({
+            "error": "Missing column: student_id"
+        }, status=400)
 
     updated = 0
     errors = []
 
     for row in reader:
-        try:
-            student_id = row.get("student_id")
+        # Clean row (keys + values)
+        row = {
+            k.strip(): (v.strip() if isinstance(v, str) else v)
+            for k, v in row.items()
+        }
 
-            marks = Marks.objects.filter(
+        student_id = row.get(student_key)
+
+        if not student_id:
+            errors.append("Row skipped: missing student_id")
+            continue
+
+        try:
+            enrollment = Enrollment.objects.get(
                 student__student_id=student_id,
                 subject__code=subject_code,
-                semester=semester
-            ).first()
+                semester=semester,
+                batch__batch_id=batch_id
+            )
 
-            if not marks:
-                errors.append(f"{student_id} not found")
-                continue
+            # Create marks if not exists
+            marks, created = Marks.objects.get_or_create(enrollment=enrollment)
 
-            # dynamically update fields
+            # Process marks fields
             for key, value in row.items():
-                if key not in ["student_id"] and value != "":
-                    setattr(marks, key, float(value))
+                if key != "student_id" and value != "":
+                    try:
+                        num_value = float(value)
+                    except:
+                        errors.append(f"{student_id}: invalid value '{value}' for {key}")
+                        continue
 
+                    old = getattr(marks, key, None)
+
+                    if old != num_value:
+                        MarksHistory.objects.create(
+                            marks=marks,
+                            field=key,
+                            old_value=old,
+                            new_value=num_value,
+                            changed_by=request.user
+                        )
+
+                    setattr(marks, key, num_value)
+
+            marks.entered_by = request.user
             marks.save()
-            updated += 1
+
+        except Enrollment.DoesNotExist:
+            errors.append(f"{student_id} enrollment not found")
 
         except Exception as e:
             errors.append(f"{student_id}: {str(e)}")
+    
+    # Create ONLY ONE activity log
+    if updated > 0:
+        from .models import Batch  # if not already imported
 
+        batch = Batch.objects.filter(batch_id=batch_id).first()
+        user_label = get_user_label(request.user)
+
+        ActivityLog.objects.create(
+            action_type="BULK_UPLOAD",
+            description=f"{updated} students updated → {batch.current_level} {semester} {subject_code} {subject.name} by {user_label}",
+            batch=batch,
+            subject=subject,
+            level=batch.current_level if batch else "",
+            semester=semester,
+            created_by=request.user
+    )
     return Response({
-        "message": f"{updated} records updated",
+        "updated": updated,
         "errors": errors
     })
-

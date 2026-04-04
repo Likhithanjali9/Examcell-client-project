@@ -113,7 +113,7 @@ export default function MarksEntry() {
   //-----------------for locking the marks table----------
   const userRole = localStorage.getItem("role");
   const username = localStorage.getItem("username");
-
+  const userLevel = localStorage.getItem("level");
 
   // ---------------- FETCH SUBJECTS ----------------
   const fetchSubjects = async (lvl) => {
@@ -226,6 +226,7 @@ export default function MarksEntry() {
   if (students.length > 0) {
   console.log("Subject Type:", students[0]?.subject_type);
   }
+  const batchStatus = batches.find(b => b.batch_id === batch)?.status;
   //------------------ useEffect forFETCH BATCHES for filterwork direct connect DB-------------
   useEffect(() => {
     const fetchBatches = async () => {
@@ -280,6 +281,10 @@ export default function MarksEntry() {
       alert("Please select CSV file");
       return;
     }
+    if (!semesterFilter || !batch || !selectedSubject) {
+      alert("Select batch, semester, subject");
+      return;
+    }
 
     try {
       const formData = new FormData();
@@ -287,17 +292,21 @@ export default function MarksEntry() {
       formData.append("subject", selectedSubject.code);
       formData.append("level", level);
       formData.append("semester", semesterFilter);
+      formData.append("batch", batch);
 
-      await api.post("/marks/bulk-upload/", formData, {
+      const res = await api.post("/marks/bulk-upload/", formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
 
-      alert("Bulk upload successful");
+      //alert("Bulk upload successful");
+      alert(`Updated: ${res.data.updated}\n Errors: ${res.data.errors.length}`);
+      console.table(res.data.errors);
       fetchMarks(selectedSubject); // refresh table
 
     } catch (err) {
       console.error(err);
-      alert("Bulk upload failed");
+      alert(err.response?.data?.error || "Bulk upload failed");
+      console.log(err.response?.data);
     }
   };
  //------------ load subjects button-----------------
@@ -656,16 +665,16 @@ export default function MarksEntry() {
                       return (
                         <tr key={s.marks_id}
                           className={`border-b hover:bg-gray-50 ${
-                            batches.find(b => b.batch_id === batch)?.status === "Completed" ||
-                            (userRole !== "coe" && s.entered_by && s.entered_by !== username)
+                            batchStatus === "Completed" ||
+                            (userRole === "faculty" && userLevel !== level)
                               ? "opacity-50 cursor-not-allowed"
                               : ""
                           }`}
                           title={
-                            batches.find(b => b.batch_id === batch)?.status === "Completed"
+                            batchStatus === "Completed"
                               ? "Batch completed"
-                              : (userRole !== "coe" && s.entered_by && s.entered_by !== username)
-                                ? "Locked: another faculty entered this"
+                              : (userRole === "faculty" && userLevel !== level)
+                                ? "Locked: Different level"
                                 : ""
                           }
                         >
@@ -686,14 +695,8 @@ export default function MarksEntry() {
                               <input
                                 type="number"
                                 disabled={
-                                  // Batch completed
-                                  batches.find(b => b.batch_id === batch)?.status === "Completed" ||
-
-                                  // Different faculty (not COE)
-                                  (userRole !== "coe" && s.entered_by && s.entered_by !== username) ||
-
-                                  // Different level faculty (IMPORTANT)
-                                  (userRole === "faculty" && s.level && s.level !== level)
+                                  batchStatus === "Completed" ||
+                                  (userRole === "faculty" && s.level !== level)
                                 }
                                 value={s[field] ?? ""}
                                 onChange={(e) =>{

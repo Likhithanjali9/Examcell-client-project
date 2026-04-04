@@ -1,4 +1,5 @@
 import axios from "axios";
+let isRefreshing = false;
 
 export const API_BASE = "http://127.0.0.1:8000/api";
 
@@ -29,10 +30,14 @@ api.interceptors.request.use((config) => {
 
 // if session completes then redirect to the login page with alert session expire
 
+{/*const logout = () => {
+  localStorage.clear(); //  better than removing individually
+  alert("Session expired. Please login again."); // optional
+  window.location.href = "/";
+  //navigate("/") //for better option
+};*/}
 const logout = () => {
-  localStorage.removeItem("access");
-  localStorage.removeItem("refresh");
-  localStorage.removeItem("role");
+  localStorage.clear();
   window.location.href = "/";
 };
 
@@ -46,8 +51,13 @@ api.interceptors.response.use(
       error.response.status === 401 &&
       !originalRequest._retry
     ) {
-      originalRequest._retry = true;
+      if (isRefreshing) {
+        logout();
+        return Promise.reject(error);
+      }
 
+      originalRequest._retry = true;
+      isRefreshing = true;
       const refresh = localStorage.getItem("refresh");
 
       if (!refresh) {
@@ -56,10 +66,7 @@ api.interceptors.response.use(
       }
 
       try {
-        const res = await api.post(
-          "/token/refresh/",
-          { refresh }
-        );
+        const res = await api.post("/token/refresh/", { refresh });
 
         const newAccess = res.data.access;
 
@@ -68,9 +75,13 @@ api.interceptors.response.use(
         api.defaults.headers.Authorization = `Bearer ${newAccess}`;
         originalRequest.headers.Authorization = `Bearer ${newAccess}`;
 
+        isRefreshing = false; // IMPORTANT
+
         return api(originalRequest);
+
       } catch (refreshError) {
-        logout();
+        isRefreshing = false; //  IMPORTANT
+        logout(); //  ONLY ONCE
         return Promise.reject(refreshError);
       }
     }
