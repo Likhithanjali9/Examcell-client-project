@@ -11,170 +11,156 @@ export default function AcademicManagement() {
 
   const [showModal, setShowModal] = useState(false);
 
-    const [newSubject, setNewSubject] = useState({
-        code: "",
-        name: "",
-        credits: 4,
-        level: "PUC1",
-        semester: "Sem1",
-        branch: "",
-        subject_type: "THEORY",
-        exam_scheme: "MID20",
-        });
-
-
+  const [newSubject, setNewSubject] = useState({
+    code: "",
+    name: "",
+    credits: 4,
+    subject_type: "THEORY",
+    exam_scheme: "MID20",
+  });
 
   const [batch, setBatch] = useState("R27");
   const [semester, setSemester] = useState("Sem1");
-  //--------------- for the batch filter ---------------
   const [batches, setBatches] = useState([]);
   const [branch, setBranch] = useState("");
 
-
-  //------------------ for update or edit subject -----------------
-  const [editModal, setEditModal] = useState(false);
-  const [editingSubject, setEditingSubject] = useState(null);
-
-
-  // ---------------- FETCH SUBJECTS ----------------
+  // ---------------- FETCH ----------------
   const fetchSubjects = async () => {
     try {
-        setLoading(true);
+      setLoading(true);
 
-        const params = {
-        level,
-        semester,
-        batch,
-        };
+      const params = { level, semester, batch };
+      if (!level.startsWith("PUC") && branch) params.branch = branch;
 
-        if (!level.startsWith("PUC") && branch) {
-        params.branch = branch;
-        }
-
-        const res = await api.get("/subjects/", { params });
-
-        setSubjects(res.data);
+      const res = await api.get("/subjects/", { params });
+      setSubjects(res.data);
     } catch (err) {
-        console.error(err);
+      console.error(err.response?.data);
     } finally {
-        setLoading(false);
+      setLoading(false);
     }
   };
 
-  // Fetch batches only once
   useEffect(() => {
     fetchBatches();
-    }, []);
+  }, []);
 
-    // Refetch subjects whenever filter changes
   useEffect(() => {
     fetchSubjects();
-    }, [level, semester, branch, batch]);
+  }, [level, semester, branch, batch]);
 
+  const fetchBatches = async () => {
+    try {
+      const res = await api.get("/batches/");
+      setBatches(res.data);
+    } catch {
+      console.error("Batch fetch failed");
+    }
+  };
 
-
-
-  // ---------------- CREATE SUBJECT ----------------
+  // ---------------- CREATE ----------------
   const handleCreateSubject = async () => {
     try {
-      // Engineering must have branch selected in filter
       if (level.startsWith("E") && !branch) {
-        alert("Please select branch from filter before creating subject.");
+        alert("Select branch first");
         return;
       }
 
+      const payload = {
+        code: newSubject.code,
+        name: newSubject.name,
+        credits: Number(newSubject.credits),
+        subject_type: newSubject.subject_type,
+        exam_scheme:
+          newSubject.subject_type === "THEORY"
+            ? newSubject.exam_scheme
+            : "NONE",
 
-      await api.post("/subjects/create/", {
-        ...newSubject,
         level,
         semester,
         regulation: batch,
-        branch: level.startsWith("E") ? branch : "",   // AUTO FROM FILTER
-      });
+        branch: level.startsWith("E") ? branch : "",
+      };
 
-      alert("Subject created successfully");
+      console.log("CREATE:", payload);
+
+      await api.post("/subjects/create/", payload);
+
+      alert("Subject created");
       setShowModal(false);
 
       setNewSubject({
         code: "",
         name: "",
         credits: 4,
-        level,
-        semester,
-        branch: "",
         subject_type: "THEORY",
         exam_scheme: "MID20",
       });
 
       fetchSubjects();
-
     } catch (err) {
-      alert(err.response?.data?.error || "Failed to create subject");
+      console.error(err.response?.data);
+      alert(err.response?.data?.error || "Failed");
     }
   };
 
-
-  // ---------------- INITIALIZE SEMESTER ----------------
+  // ---------------- INIT SEM ----------------
   const initializeSemester = async () => {
     try {
       await api.post("/semester/setup/", {
         batch_id: batch,
-        semester: semester,
+        semester,
       });
 
-      alert("Semester initialized successfully");
+      alert("Semester initialized");
     } catch (err) {
-      alert(err.response?.data?.error || "Initialization failed");
+      console.error(err.response?.data);
+
+      // fallback
+      try {
+        await api.post("/semester/setup/", {
+          batch,
+          semester,
+        });
+        alert("Semester initialized");
+      } catch {
+        alert("Init failed");
+      }
     }
   };
-  // ------------------- DELETE SUBJECTS -------------------
-  const handleDeleteSubject = async (id) => {
-  if (!window.confirm("Are you sure you want to delete this subject?"))
-    return;
 
-  try {
+  // ---------------- DELETE ----------------
+  const handleDelete = async (id) => {
+    if (!window.confirm("Delete subject?")) return;
     await api.delete(`/subjects/delete/${id}/`);
     fetchSubjects();
-  } catch (err) {
-    alert("Delete failed");
-  }
-};
-//------------- fetch batches from the db for the batch filter ---------------
-const fetchBatches = async () => {
-  try {
-    const res = await api.get("/batches/");
-    setBatches(res.data);
-  } catch (err) {
-    console.error("Failed to fetch batches");
-  }
-};
-
-
+  };
 
   return (
-    <div className="min-h-screen flex bg-gray-50 text-gray-800 font-sans">
+    <div className="flex min-h-screen bg-gray-50">
       <Sidebar sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen} />
 
       <main className="flex-1 p-8">
-        <div className="max-w-6xl mx-auto bg-white p-6 rounded-lg border shadow-sm">
+        <div className="bg-white p-6 rounded-xl shadow-md">
 
-          <h1 className="text-2xl font-bold mb-1">
+          {/* HEADER */}
+          <h1 className="text-2xl font-bold text-red-600">
             Academic Management
           </h1>
-          <p className="text-sm text-gray-500 mb-6">
+          <p className="text-gray-500 mb-6">
             Manage subjects and semester structure
           </p>
 
-          {/* LEVEL SELECT */}
-          <div className="flex gap-4 mb-6">
+          {/* LEVEL */}
+          <div className="flex gap-3 mb-6">
             {["PUC1", "PUC2", "E1", "E2", "E3", "E4"].map((lvl) => (
               <button
                 key={lvl}
                 onClick={() => setLevel(lvl)}
                 className={`px-4 py-2 rounded border ${
                   level === lvl
-                    ? "bg-red-50 border-red-500"
-                    : "hover:bg-gray-50"
+                    ? "bg-red-100 text-red-600 border-red-500"
+                    : "hover:bg-red-50"
                 }`}
               >
                 {lvl}
@@ -183,362 +169,184 @@ const fetchBatches = async () => {
           </div>
 
           {/* ACTION BAR */}
-          <div className="flex justify-between items-center mb-6">
+          <div className="flex justify-between mb-6">
+
             <button
               onClick={() => setShowModal(true)}
-              className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
+              className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700"
             >
               + Add Subject
             </button>
 
-            <div className="flex items-end gap-6">
+            <div className="flex gap-4">
 
-                {/* Batch Filter */}
-                <div>
-                    <label className="block text-sm font-medium mb-1">
-                    Batch
-                    </label>
-                    <select
-                    value={batch}
-                    onChange={(e) => setBatch(e.target.value)}
-                    className="border px-3 py-2 rounded"
-                    >
-                    {batches.map((b) => (
-                        <option key={b.batch_id} value={b.batch_id}>
-                        {b.batch_id} ({b.status})
-                        </option>
-                    ))}
-                    </select>
-                </div>
-
-                {/* Branch Filter (Engineering Only) */}
-                {!level.startsWith("PUC") && (
-                    <div>
-                    <label className="block text-sm font-medium mb-1">
-                        Branch
-                    </label>
-                    <select
-                        value={branch}
-                        onChange={(e) => setBranch(e.target.value)}
-                        className="border px-3 py-2 rounded"
-                    >
-                        <option value="">SELECT BRANCH</option>
-                        <option value="AIML">AIML</option>
-                        <option value="CSE">CSE</option>
-                        <option value="ECE">ECE</option>
-                        <option value="EEE">EEE</option>
-                        <option value="MECH">MECH</option>
-                        <option value="CIVIL">CIVIL</option>
-                        <option value="CHEM">CHEM</option>
-                        <option value="MME">MME</option>
-                    </select>
-                    </div>
-                )}
-
-                {/* Semester Filter */}
-                <div>
-                    <label className="block text-sm font-medium mb-1">
-                    Semester
-                    </label>
-                    <select
-                    value={semester}
-                    onChange={(e) => setSemester(e.target.value)}
-                    className="border px-3 py-2 rounded"
-                    >
-                    <option value="Sem1">Semester 1</option>
-                    <option value="Sem2">Semester 2</option>
-                    </select>
-                </div>
-
-                {/* Initialize Button */}
-                <div>
-                    <button
-                    onClick={initializeSemester}
-                    className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
-                    >
-                    Initialize Semester
-                    </button>
-                </div>
-
-            </div>
-
-          </div>
-
-          {/* SUBJECT TABLE */}
-          <div className="overflow-x-auto border rounded-lg">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-100">
-                <tr>
-                  <th className="p-3 text-left">Code</th>
-                  <th className="p-3 text-left">Name</th>
-                  <th className="p-3 text-center">Credits</th>
-                  <th className="p-3 text-center">Type</th>
-                  <th className="p-3 text-center">Scheme</th>
-                  <th className="p-3 text-center">Actions</th>
-
-                </tr>
-              </thead>
-              <tbody>
-                {subjects.map((sub) => (
-                  <tr key={sub.code} className="border-b hover:bg-gray-50">
-                    <td className="p-3">{sub.code}</td>
-                    <td className="p-3">{sub.name}</td>
-                    <td className="p-3 text-center">{sub.credits}</td>
-                    <td className="p-3 text-center">
-                      {sub.subject_type}
-
-                    </td>
-                    <td className="p-3 text-center">
-                        {sub.subject_type === "THEORY" ? sub.exam_scheme : "-"}
-                    </td>
-
-                    <td className="p-3 text-center space-x-3">
-                        <button
-                            onClick={() => {
-                            setEditingSubject(sub);
-                            setEditModal(true);
-                            }}
-                            className="text-blue-600 hover:underline"
-                        >
-                            Edit
-                        </button>
-
-                        <button
-                            onClick={() => handleDeleteSubject(sub.id)}
-                            className="text-red-600 hover:underline"
-                        >
-                            Delete
-                        </button>
-                    </td>
-
-
-                  </tr>
+              <select
+                value={batch}
+                onChange={(e) => setBatch(e.target.value)}
+                className="border px-3 py-2 rounded"
+              >
+                {batches.map((b) => (
+                  <option key={b.batch_id} value={b.batch_id}>
+                    {b.batch_id}
+                  </option>
                 ))}
-              </tbody>
-            </table>
+              </select>
+
+              {!level.startsWith("PUC") && (
+                <select
+                  value={branch}
+                  onChange={(e) => setBranch(e.target.value)}
+                  className="border px-3 py-2 rounded"
+                >
+                  <option value="">Branch</option>
+                  <option value="CSE">CSE</option>
+                  <option value="ECE">ECE</option>
+                  <option value="EEE">EEE</option>
+                </select>
+              )}
+
+              <select
+                value={semester}
+                onChange={(e) => setSemester(e.target.value)}
+                className="border px-3 py-2 rounded"
+              >
+                <option value="Sem1">Semester 1</option>
+                <option value="Sem2">Semester 2</option>
+              </select>
+
+              <button
+                onClick={initializeSemester}
+                className="bg-red-600 text-white px-4 py-2 rounded"
+              >
+                Initialize Semester
+              </button>
+            </div>
           </div>
 
-          {loading && (
-            <div className="text-center text-sm text-gray-500 mt-4">
-              Loading...
-            </div>
-          )}
-          {subjects.length === 0 && !loading && (
-            <div className="text-center text-red-500 mt-4">
-                No subjects created for {batch} - {level} - {semester}.
-            </div>
-           )}
+          {/* TABLE */}
+          <table className="w-full border rounded">
+            <thead className="bg-gray-100">
+              <tr>
+                <th className="p-2">Code</th>
+                <th className="p-2">Name</th>
+                <th className="p-2">Credits</th>
+                <th className="p-2">Type</th>
+                <th className="p-2">Scheme</th>
+                <th className="p-2">Actions</th>
+              </tr>
+            </thead>
 
-
+            <tbody>
+              {subjects.map((s) => (
+                <tr key={s.id} className="border-b hover:bg-red-50">
+                  <td className="p-2">{s.code}</td>
+                  <td className="p-2">{s.name}</td>
+                  <td className="p-2 text-center">{s.credits}</td>
+                  <td className="p-2 text-center">{s.subject_type}</td>
+                  <td className="p-2 text-center">{s.exam_scheme || "-"}</td>
+                  <td className="p-2 text-center">
+                    <button
+                      onClick={() => handleDelete(s.id)}
+                      className="text-red-600"
+                    >
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
 
           {/* MODAL */}
           {showModal && (
-            <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
-              <div className="bg-white p-6 rounded-lg w-96 shadow-lg">
-                <h2 className="text-lg font-bold mb-4">
+            <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-center">
+              <div className="bg-white p-6 rounded-xl w-96 shadow-lg">
+
+                <h2 className="text-lg font-bold mb-4 text-red-600">
                   Add New Subject
                 </h2>
 
                 <input
-                  type="text"
                   placeholder="Subject Code"
+                  className="w-full border p-2 mb-3 rounded"
                   value={newSubject.code}
                   onChange={(e) =>
                     setNewSubject({ ...newSubject, code: e.target.value })
                   }
-                  className="w-full border px-3 py-2 rounded mb-3"
                 />
 
                 <input
-                  type="text"
                   placeholder="Subject Name"
+                  className="w-full border p-2 mb-3 rounded"
                   value={newSubject.name}
                   onChange={(e) =>
                     setNewSubject({ ...newSubject, name: e.target.value })
                   }
-                  className="w-full border px-3 py-2 rounded mb-3"
                 />
 
                 <input
                   type="number"
                   placeholder="Credits"
+                  className="w-full border p-2 mb-3 rounded"
                   value={newSubject.credits}
+                  onChange={(e) =>
+                    setNewSubject({ ...newSubject, credits: e.target.value })
+                  }
+                />
+
+                {/* SUBJECT TYPE */}
+                <select
+                  className="w-full border p-2 mb-3 rounded"
+                  value={newSubject.subject_type}
                   onChange={(e) =>
                     setNewSubject({
                       ...newSubject,
-                      credits: e.target.value,
+                      subject_type: e.target.value,
                     })
                   }
-                  className="w-full border px-3 py-2 rounded mb-3"
-                />
-                
-                <select
-                    value={newSubject.subject_type}
+                >
+                  <option value="THEORY">Theory</option>
+                  <option value="LAB">Lab</option>
+                  <option value="PROJECT">Project</option>
+                  <option value="INTERNSHIP">Internship</option>
+                  <option value="ELECTIVE">Elective</option>
+                </select>
+
+                {/* SCHEME */}
+                {newSubject.subject_type === "THEORY" && (
+                  <select
+                    className="w-full border p-2 mb-3 rounded"
+                    value={newSubject.exam_scheme}
                     onChange={(e) =>
-                        setNewSubject({
+                      setNewSubject({
                         ...newSubject,
-                        subject_type: e.target.value,
-                        })
+                        exam_scheme: e.target.value,
+                      })
                     }
-                    className="w-full border px-3 py-2 rounded mb-3"
-                    >
-                    <option value="THEORY">Theory</option>
-                    <option value="LAB">Lab</option>
-                    <option value="PROJECT">Project</option>
-                    <option value="INTERNSHIP">Internship</option>
-                    <option value="ELECTIVE">Elective</option>
-                    </select>
-                    {newSubject.subject_type === "THEORY" && (
-                        <select
-                            value={newSubject.exam_scheme}
-                            onChange={(e) =>
-                            setNewSubject({
-                                ...newSubject,
-                                exam_scheme: e.target.value,
-                            })
-                            }
-                            className="w-full border px-3 py-2 rounded mb-3"
-                        >
-                            <option value="MID20">Mid 20 (Best of 2)</option>
-                            <option value="MID15_AT4">Mid 15 + AT</option>
-                            <option value="MID40">Mid 40 (Best of 2 Avg)</option>
-                            <option value="ZERO_CREDIT">Zero Credit (Only EST 100)</option>
-                        </select>
-                        )}
-
-                    {/*<select
-                        value={newSubject.exam_scheme}
-                        onChange={(e) =>
-                            setNewSubject({
-                            ...newSubject,
-                            exam_scheme: e.target.value,
-                            })
-                        }
-                        className="w-full border px-3 py-2 rounded mb-3"
-                        >
-                        <option value="MID20">Mid 20 (Best of 2)</option>
-                        <option value="MID15_AT4">Mid 15 + AT</option>
-                        <option value="MID40">Mid 40 (Best of 2 Avg)</option>
-                        <option value="ZERO_CREDIT">Zero Credit (Only EST 100)</option>
-                    </select>*/}
-
-
+                  >
+                    <option value="MID20">Mid 20 (Best of 2)</option>
+                    <option value="MID15_AT4">Mid 15 + AT</option>
+                    <option value="MID40">Mid 40 (Best of 2 Avg)</option>
+                    <option value="ZERO_CREDIT">
+                      Zero Credit (Only EST 100)
+                    </option>
+                  </select>
+                )}
 
                 <div className="flex justify-end gap-3">
-                  <button
-                    onClick={() => setShowModal(false)}
-                    className="px-4 py-2 border rounded"
-                  >
-                    Cancel
-                  </button>
+                  <button onClick={() => setShowModal(false)}>Cancel</button>
 
                   <button
                     onClick={handleCreateSubject}
-                    className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                    className="bg-red-600 text-white px-4 py-2 rounded"
                   >
                     Save
                   </button>
                 </div>
+
               </div>
             </div>
           )}
-          {editModal && editingSubject && (
-            <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
-                <div className="bg-white p-6 rounded-lg w-96 shadow-lg">
-                <h2 className="text-lg font-bold mb-4">
-                    Edit Subject
-                </h2>
-
-                <input
-                    type="text"
-                    value={editingSubject.name}
-                    onChange={(e) =>
-                    setEditingSubject({ ...editingSubject, name: e.target.value })
-                    }
-                    className="w-full border px-3 py-2 rounded mb-3"
-                />
-
-                <input
-                    type="number"
-                    value={editingSubject.credits}
-                    onChange={(e) =>
-                    setEditingSubject({ ...editingSubject, credits: e.target.value })
-                    }
-                    className="w-full border px-3 py-2 rounded mb-3"
-                />
-
-                <select
-                    value={editingSubject.subject_type}
-                    onChange={(e) =>
-                    setEditingSubject({
-                        ...editingSubject,
-                        subject_type: e.target.value,
-                        exam_scheme:
-                        e.target.value === "THEORY"
-                            ? editingSubject.exam_scheme
-                            : "NONE",
-                    })
-                    }
-                    className="w-full border px-3 py-2 rounded mb-3"
-                >
-                    <option value="THEORY">Theory</option>
-                    <option value="LAB">Lab</option>
-                    <option value="PROJECT">Project</option>
-                    <option value="INTERNSHIP">Internship</option>
-                    <option value="ELECTIVE">Elective</option>
-                </select>
-
-                {/* Show Scheme only for THEORY */}
-                {editingSubject.subject_type === "THEORY" && (
-                    <select
-                    value={editingSubject.exam_scheme}
-                    onChange={(e) =>
-                        setEditingSubject({
-                        ...editingSubject,
-                        exam_scheme: e.target.value,
-                        })
-                    }
-                    className="w-full border px-3 py-2 rounded mb-3"
-                    >
-                    <option value="MID20">Mid 20 (Best of 2)</option>
-                    <option value="MID15_AT4">Mid 15 + AT</option>
-                    <option value="MID40">Mid 40 (Best of 2 Avg)</option>
-                    <option value="ZERO_CREDIT">Zero Credit (Only EST 100)</option>
-                    </select>
-                )}
-
-                <div className="flex justify-end gap-3">
-                    <button
-                    onClick={() => setEditModal(false)}
-                    className="px-4 py-2 border rounded"
-                    >
-                    Cancel
-                    </button>
-
-                    <button
-                    onClick={async () => {
-                        try {
-                        await api.patch(
-                            `/subjects/update/${editingSubject.id}/`,
-                            editingSubject
-                        );
-
-                        alert("Subject updated successfully");
-                        setEditModal(false);
-                        fetchSubjects();
-                        } catch (err) {
-                        alert("Update failed");
-                        }
-                    }}
-                    className="px-4 py-2 bg-blue-600 text-white rounded"
-                    >
-                    Save Changes
-                    </button>
-                </div>
-                </div>
-            </div>
-        )}
-
         </div>
       </main>
     </div>

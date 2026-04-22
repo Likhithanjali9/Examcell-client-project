@@ -66,6 +66,8 @@ export default function BatchManagement() {
   //for exam activity
   const [selectedExam, setSelectedExam] = useState("");
   const [activeExam, setActiveExam] = useState(null);
+  // for section in student tab
+  const [sectionFile, setSectionFile] = useState(null);
 
   // ---------- FETCH ----------
   useEffect(() => {
@@ -306,7 +308,31 @@ export default function BatchManagement() {
       alert("Error creating batch: " + (err.response?.data?.error || err.message));
     }
   };
+  // ------------sections list bulk uplode of students--------------------
+  const handleUploadSections = async () => {
+    if (!sectionFile) {
+      alert("Upload CSV first");
+      return;
+    }
 
+    //  ADD HERE
+    const confirmUpload = window.confirm(
+      "This will overwrite previous section data. Continue?"
+    );
+
+    if (!confirmUpload) return;
+
+    const fd = new FormData();
+    fd.append("file", sectionFile);
+    fd.append("batch", modalBatchState?.batch_id);
+
+    try {
+      const res = await api.post("/upload-sections/", fd);
+      alert(`Updated: ${res.data.updated}`);
+    } catch (err) {
+      alert("Upload failed");
+    }
+  };
   // ---------- PROMOTE ----------
   const openPromoteModal = (idx) => {
     setPromoteBatchIdx(idx);
@@ -496,6 +522,11 @@ const totalStudents = activeStudents + completedStudents;
               const currentLevel = getCurrentLevel(batch);
               const currentSemester = batch.current_semester || "Sem1";
               const startYear = batch.start_year || batch.startYear || batch.start || "";
+              const showPromoteSemester = batch.current_semester === "Sem1";
+              const showPromoteBatch =
+                batch.current_semester === "Sem2" && batch.current_level !== "E4";
+              const showComplete =
+                batch.current_level === "E4" && batch.current_semester === "Sem2";
 
               return (
                 <div key={batchKey || idx} className="border border-red-200 rounded-lg p-4 bg-white shadow-sm h-full flex flex-col justify-between">
@@ -543,36 +574,47 @@ const totalStudents = activeStudents + completedStudents;
                     <button className="text-xs text-red-700 font-semibold hover:underline" onClick={() => openModal(idx)}>
                       View →
                     </button>
-                    {role === "coe" && batch.status === "Active" && currentSemester === "Sem1" && (
-                      <button
-                        onClick={() => handlePromoteSemester(batch)}
-                        className="text-xs bg-red-600 text-white px-2 py-1 rounded-full hover:bg-red-700"
-                      >
-                        Promote Semester
-                      </button>
-                    )}
-
-                    {/* If at E4 show Complete, else show Promote */}
-                    {/* If batch is completed → NO more promote or complete */}
-                    {role ==="coe"&&(
+                    {role === "coe" && (
                       (batch.status || "").toLowerCase() === "completed" ? (
+
                         <span className="text-xs bg-gray-300 text-gray-700 px-3 py-1 rounded-full">
                           Completed
                         </span>
-                      ) : currentLevel === "E4" ? (
-                        <button
-                          onClick={() => handleComplete(batch)}
-                          className="text-xs bg-gray-700 text-white px-3 py-1 rounded-full hover:bg-gray-800"
-                        >
-                          Complete
-                        </button>
+
                       ) : (
-                        <button
-                          className="text-xs bg-red-600 text-white px-3 py-1 rounded-full hover:bg-red-700 flex items-center gap-1"
-                          onClick={() => openPromoteModal(idx)}
-                        >
-                          <ArrowUpCircle size={14} /> Promote
-                        </button>
+                        <div className="flex gap-2">
+
+                          {/* Sem1 → Promote Semester */}
+                          {batch.current_semester === "Sem1" && (
+                            <button
+                              onClick={() => handlePromoteSemester(batch)}
+                              className="text-xs bg-blue-500 text-white px-2 py-1 rounded-full hover:bg-blue-600"
+                            >
+                              Promote Semester
+                            </button>
+                          )}
+
+                          {/* Sem2 + not E4 → Promote Batch */}
+                          {batch.current_semester === "Sem2" && batch.current_level !== "E4" && (
+                            <button
+                              onClick={() => openPromoteModal(idx)}
+                              className="text-xs bg-green-600 text-white px-3 py-1 rounded-full hover:bg-green-700 flex items-center gap-1"
+                            >
+                              <ArrowUpCircle size={14} /> Promote Batch
+                            </button>
+                          )}
+
+                          {/* E4 + Sem2 → Complete */}
+                          {batch.current_level === "E4" && batch.current_semester === "Sem2" && (
+                            <button
+                              onClick={() => handleComplete(batch)}
+                              className="text-xs bg-gray-700 text-white px-3 py-1 rounded-full hover:bg-gray-800"
+                            >
+                              Complete
+                            </button>
+                          )}
+
+                        </div>
                       )
                     )}
 
@@ -695,6 +737,21 @@ const totalStudents = activeStudents + completedStudents;
 
                   {modalTab === "students" && (
                       <div>
+                        <div className="flex items-center gap-2 mb-4">
+                          <input
+                            type="file"
+                            accept=".csv"
+                            onChange={(e) => setSectionFile(e.target.files[0])}
+                            className="text-xs"
+                          />
+
+                          <button
+                            onClick={handleUploadSections}
+                            className="bg-purple-600 text-white px-3 py-1 rounded text-xs hover:bg-purple-700"
+                          >
+                            Upload Sections
+                          </button>
+                        </div>
                         {(() => {
                           const students = activeBatch.students || [];
 

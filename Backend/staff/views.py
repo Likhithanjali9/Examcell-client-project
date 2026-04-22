@@ -40,8 +40,24 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 
 '''-----------------------------------------------------------'''
+#------------- role names for coe and faculty for active log-------------------
+def get_user_label(user):
+    if not user:
+        return "System"
+
+    if user.role == "coe":
+        return "COE"
+
+    if user.role == "faculty":
+        faculty = Faculty.objects.filter(user=user).first()
+        if faculty:
+            return f"{faculty.level} Faculty"
+        return "Faculty"
+
+    return "User"
 
 
+#------------------------------------------------------------------------------
 # order of progression
 LEVEL_ORDER = ["PUC1", "PUC2", "E1", "E2", "E3", "E4"]
 
@@ -188,7 +204,7 @@ def promote_batch(request, batch_id):
                 title="Batch Promoted",
                 message=f"{batch.batch_id} promoted to PUC2 - Sem1. Please create subjects.",
                 batch=batch,
-                level=next_level
+                level="PUC2"
             )
             return Response({"message": "Promoted to PUC2 (no CSV required)"})
 
@@ -250,7 +266,7 @@ def promote_batch(request, batch_id):
                 title="Batch Promoted",
                 message=f"{batch.batch_id} promoted to E1 - Sem1. Please create subjects.",
                 batch=batch,
-                level=next_level
+                level="E1"
             )
             return Response({
                 "message": "Promoted to E1",
@@ -285,29 +301,34 @@ def promote_batch(request, batch_id):
             )           
             return Response({"message": f"Promoted to {next_level}"})
 
-        # E4 -> Completed
-        if current == "E4":
-            batch.current_level = "Completed"
-            batch.current_semester = None
+        # E4 Sem2 -> Completed
+        if current == "E4" and batch.current_semester == "Sem2":
+
             batch.status = "Completed"
             batch.current_academic_year = compute_academic_year(batch.start_year, "E4")
             batch.save()
-            #active exams kill after batch promotion 
+
+            # deactivate active exams
             ExamStatus.objects.filter(batch=batch, is_active=True).update(is_active=False)
-            # activity shows after promotions 
+
+            # activity log
             ActivityLog.objects.create(
                 action_type="BATCH_COMPLETE",
                 description=f"{batch.batch_id} marked completed",
                 batch=batch,
-                level="Completed",
+                level=batch.current_level,   # keep E4
+                semester=batch.current_semester,
                 created_by=request.user
-            )       
+            )
+
+            # notification
             Notification.objects.create(
                 title="Batch Completed",
                 message=f"{batch.batch_id} marked as Completed.",
                 batch=batch,
-                level="Completed"
-            )  
+                level=batch.current_level   # VERY IMPORTANT
+            )
+
             return Response({"message": "Batch marked Completed"})
 
         return Response({"error": "Invalid promotion state"}, status=400)
@@ -425,10 +446,12 @@ def faculty_login(request):
         if user.check_password(password):
             from rest_framework_simplejwt.tokens import RefreshToken
             refresh = RefreshToken.for_user(user)
+            faculty = Faculty.objects.filter(user=user).first()
             return Response({
                 "access": str(refresh.access_token),
                 "refresh": str(refresh),
-                "role": "faculty"
+                "role": "faculty",
+                "level": faculty.level if faculty else None
             })
         else:
             return Response({'error': 'Invalid password'}, status=status.HTTP_401_UNAUTHORIZED)
@@ -538,6 +561,7 @@ def list_marks(request):
     semester = request.GET.get("semester")
     level = request.GET.get("level")
     subject_code = request.GET.get("subject")
+    section = request.GET.get("section")
 
     qs = Marks.objects.select_related(
         "enrollment__student",
@@ -560,7 +584,9 @@ def list_marks(request):
         subject_obj = Subject.objects.filter(code=subject_code).first()
         if subject_obj and subject_obj.branch:
             qs = qs.filter(enrollment__student__branch=subject_obj.branch)
-
+    
+    if section:
+        qs = qs.filter(enrollment__student__section=section)
 
     data = []
 
@@ -591,9 +617,11 @@ def list_marks(request):
             "name": m.enrollment.student.name,
             "branch": m.enrollment.student.branch,
             "semester": m.enrollment.semester,
+            "section": m.enrollment.student.section,
             "subject_type": m.enrollment.subject.subject_type,
             "exam_scheme": m.enrollment.subject.exam_scheme,
             "credits": m.enrollment.subject.credits,
+            "level": m.enrollment.subject.level,
 
             # THEORY FIELDS
             "mid1": m.mid1,
@@ -897,9 +925,10 @@ def save_marks(request):
     batch = marks.enrollment.batch
     semester = marks.enrollment.semester
 
+    user_label = get_user_label(request.user)
     ActivityLog.objects.create(
         action_type="MARK_UPDATE",
-        description=f"{batch.current_level} {semester} {subject.code} updated",
+        description=f"{batch.current_level} {semester} {subject.code} {subject.name} marks updated by {user_label}",
         batch=batch,
         subject=subject,
         level=batch.current_level,
@@ -1388,50 +1417,212 @@ def update_subject(request, subject_id):
     return Response({"message": "Subject updated successfully"})
 
 #----------------BULK UPLODE FUNCTION FOR THE MARKS ENTRY-------------------------
+
 @api_view(["POST"])
+@permission_classes([IsAuthenticated])
 def bulk_upload_marks(request):
+    import csv
+
     file = request.FILES.get("file")
     subject_code = request.data.get("subject")
-    level = request.data.get("level")
     semester = request.data.get("semester")
+    batch_id = request.data.get("batch")
+
+    subject = Subject.objects.filter(code=subject_code).first()
 
     if not file:
         return Response({"error": "File required"}, status=400)
 
-    import csv
-    decoded_file = file.read().decode("utf-8").splitlines()
-    reader = csv.DictReader(decoded_file)
+    # Read CSV
+    #decoded = file.read().decode("utf-8").splitlines()
+    decoded = file.read().decode("utf-8-sig").splitlines()
+    reader = csv.DictReader(decoded)
+
+    # Clean column names
+    reader.fieldnames = [field.strip() for field in reader.fieldnames]
+
+    # Detect student_id column flexibly
+    student_key = None
+
+    for key in reader.fieldnames:
+        cleaned = key.strip().lower().replace(" ", "").replace("_", "")
+        if cleaned == "studentid":
+            student_key = key
+            break
+
+    if not student_key:
+        return Response({
+            "error": "Missing column: student_id"
+        }, status=400)
 
     updated = 0
     errors = []
 
     for row in reader:
-        try:
-            student_id = row.get("student_id")
+        # Clean row (keys + values)
+        row = {
+            k.strip(): (v.strip() if isinstance(v, str) else v)
+            for k, v in row.items()
+        }
 
-            marks = Marks.objects.filter(
+        student_id = row.get(student_key)
+
+        if not student_id:
+            errors.append("Row skipped: missing student_id")
+            continue
+
+        try:
+            enrollment = Enrollment.objects.get(
                 student__student_id=student_id,
                 subject__code=subject_code,
-                semester=semester
-            ).first()
+                semester=semester,
+                batch__batch_id=batch_id
+            )
 
-            if not marks:
-                errors.append(f"{student_id} not found")
-                continue
+            # Create marks if not exists
+            marks, created = Marks.objects.get_or_create(enrollment=enrollment)
 
-            # dynamically update fields
+            # Process marks fields
             for key, value in row.items():
-                if key not in ["student_id"] and value != "":
-                    setattr(marks, key, float(value))
+                if key != "student_id" and value != "":
+                    try:
+                        num_value = float(value)
+                    except:
+                        errors.append(f"{student_id}: invalid value '{value}' for {key}")
+                        continue
 
+                    old = getattr(marks, key, None)
+
+                    if old != num_value:
+                        MarksHistory.objects.create(
+                            marks=marks,
+                            field=key,
+                            old_value=old,
+                            new_value=num_value,
+                            changed_by=request.user
+                        )
+
+                    setattr(marks, key, num_value)
+
+            marks.entered_by = request.user
             marks.save()
-            updated += 1
+
+        except Enrollment.DoesNotExist:
+            errors.append(f"{student_id} enrollment not found")
 
         except Exception as e:
             errors.append(f"{student_id}: {str(e)}")
+    
+    # Create ONLY ONE activity log
+    if updated > 0:
+        from .models import Batch  # if not already imported
 
+        batch = Batch.objects.filter(batch_id=batch_id).first()
+        user_label = get_user_label(request.user)
+
+        ActivityLog.objects.create(
+            action_type="BULK_UPLOAD",
+            description=f"{updated} students updated → {batch.current_level} {semester} {subject_code} {subject.name} by {user_label}",
+            batch=batch,
+            subject=subject,
+            level=batch.current_level if batch else "",
+            semester=semester,
+            created_by=request.user
+    )
     return Response({
-        "message": f"{updated} records updated",
+        "updated": updated,
         "errors": errors
     })
 
+#--------------- uplode section in batch management section in student tab---------------------------
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def upload_sections(request):
+    import csv
+
+    file = request.FILES.get("file")
+    batch_id = request.data.get("batch")   # IMPORTANT
+    semester = request.data.get("semester") 
+
+    if not file:
+        return Response({"error": "File required"}, status=400)
+
+    decoded = file.read().decode("utf-8-sig").splitlines()
+    reader = csv.DictReader(decoded)
+
+    updated = 0
+    errors = []
+
+    for row in reader:
+        student_id = row.get("student_id")
+        section = row.get("section")
+
+        if not student_id or not section:
+            errors.append("Missing data")
+            continue
+
+        try:
+            student = Student.objects.filter(
+                student_id=student_id,
+                batch__batch_id=batch_id
+            ).first()
+
+            if not student:
+                errors.append(f"{student_id} not found in batch {batch_id}")
+                continue
+
+            student.section = section.strip().upper()
+            student.save()
+            updated += 1
+
+        except Student.DoesNotExist:
+            errors.append(f"{student_id} not found")
+
+    #  Activity Log (ONLY ONCE)
+    if updated > 0:
+        batch = Batch.objects.filter(batch_id=batch_id).first()
+        user_label = get_user_label(request.user)
+
+        ActivityLog.objects.create(
+            action_type="UPLOAD_SECTIONS",
+            description=f"{updated} students assigned sections for {batch_id} by {user_label}",
+            batch=batch,
+            level=batch.current_level if batch else "",
+            semester=batch.current_semester if batch else "",
+            created_by=request.user
+        )
+
+    return Response({
+        "updated": updated,
+        "errors": errors
+    })
+#get sections from enrollments
+'''@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_sections(request):
+    batch = request.GET.get("batch")
+    semester = request.GET.get("semester")
+
+    enrollments = Enrollment.objects.filter(
+        batch__batch_id=batch,
+        semester=semester,
+        section__isnull=False   #IMPORTANT
+    ).exclude(section="")       #IMPORTANT
+
+    sections = enrollments.values_list("section", flat=True).distinct()
+
+    return Response(sorted(sections))'''
+#get sections from the students
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_sections(request):
+    batch = request.GET.get("batch")
+
+    students = Student.objects.filter(
+        batch__batch_id=batch,
+        section__isnull=False
+    ).exclude(section="")
+
+    sections = students.values_list("section", flat=True).distinct()
+
+    return Response(sorted(sections))
