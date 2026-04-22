@@ -69,9 +69,6 @@ function getMarksColumns(subjectType, examScheme) {
 }
 
 
-
-
-
 export default function MarksEntry() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
@@ -113,7 +110,11 @@ export default function MarksEntry() {
   //-----------------for locking the marks table----------
   const userRole = localStorage.getItem("role");
   const username = localStorage.getItem("username");
-
+  const userLevel = localStorage.getItem("level");
+  //----------sections work--------------------------
+  const [sections, setSections] = useState([]);
+  const [sectionFilter, setSectionFilter] = useState("");
+  const hasSections = sections.length > 0;
 
   // ---------------- FETCH SUBJECTS ----------------
   const fetchSubjects = async (lvl) => {
@@ -160,6 +161,7 @@ export default function MarksEntry() {
           semester: semesterFilter !== "ALL" ? semesterFilter : "",
           level,
           subject: subjectObj.code,
+          section: sectionFilter 
         }
 
       });
@@ -226,6 +228,7 @@ export default function MarksEntry() {
   if (students.length > 0) {
   console.log("Subject Type:", students[0]?.subject_type);
   }
+  const batchStatus = batches.find(b => b.batch_id === batch)?.status;
   //------------------ useEffect forFETCH BATCHES for filterwork direct connect DB-------------
   useEffect(() => {
     const fetchBatches = async () => {
@@ -244,7 +247,22 @@ export default function MarksEntry() {
     if (selectedSubject) {
       fetchMarks(selectedSubject);
     }
-  }, [batch, semesterFilter, branchFilter]);
+  }, [batch, semesterFilter, branchFilter,sectionFilter]);
+
+  //for sections
+  useEffect(() => {
+    if (batch && semesterFilter) {
+      api.get("/sections/", {
+        params: {
+          batch,
+          semester: semesterFilter
+        }
+      })
+      .then(res => {console.log("SECTIONS:", res.data);
+        setSections(res.data);})
+      .catch(() => setSections([]));
+    }
+  }, [batch, semesterFilter]);
 
 //---------------- export pdf function -------------
   const handleExportPDF = async () => {
@@ -280,6 +298,10 @@ export default function MarksEntry() {
       alert("Please select CSV file");
       return;
     }
+    if (!semesterFilter || !batch || !selectedSubject) {
+      alert("Select batch, semester, subject");
+      return;
+    }
 
     try {
       const formData = new FormData();
@@ -287,17 +309,21 @@ export default function MarksEntry() {
       formData.append("subject", selectedSubject.code);
       formData.append("level", level);
       formData.append("semester", semesterFilter);
+      formData.append("batch", batch);
 
-      await api.post("/marks/bulk-upload/", formData, {
+      const res = await api.post("/marks/bulk-upload/", formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
 
-      alert("Bulk upload successful");
+      //alert("Bulk upload successful");
+      alert(`Updated: ${res.data.updated}\n Errors: ${res.data.errors.length}`);
+      console.table(res.data.errors);
       fetchMarks(selectedSubject); // refresh table
 
     } catch (err) {
       console.error(err);
-      alert("Bulk upload failed");
+      alert(err.response?.data?.error || "Bulk upload failed");
+      console.log(err.response?.data);
     }
   };
  //------------ load subjects button-----------------
@@ -502,8 +528,29 @@ export default function MarksEntry() {
           
           {/* TABLE ACTION BAR */}
           {selectedSubject && (
-              <div className="flex justify-end items-end gap-4 mb-4 bg-gray-50 p-3 rounded border">
+              <div className="flex justify-between items-end gap-4 mb-4 bg-gray-50 p-3 rounded border flex-wrap">
+                 {/* LEFT SIDE → FILTERS */}
+                  <div className="flex gap-4 items-end flex-wrap">
 
+                    {/* SECTION FILTER */}
+                    {hasSections && (
+                      <div className="flex flex-col">
+                        <label className="text-xs text-gray-600 mb-1">Section</label>
+                        <select
+                          value={sectionFilter}
+                          onChange={(e) => setSectionFilter(e.target.value)}
+                          className="border px-3 py-2 rounded"
+                        >
+                          <option value="">All Sections</option>
+                          {sections.map((sec) => (
+                            <option key={sec} value={sec}>
+                              {sec}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
 
                 {/* Search */}
                 <div className="flex flex-col">
@@ -618,6 +665,7 @@ export default function MarksEntry() {
                         <th className="p-3 text-center">Branch</th>
                       )}
                       <th className="p-3 text-center">Semester</th>
+                      {hasSections && <th className="p-3 text-center">Section</th>}
                       {students.length > 0 &&
                         getMarksColumns(students[0].subject_type,students[0].exam_scheme).map((col) => (
 
@@ -656,16 +704,16 @@ export default function MarksEntry() {
                       return (
                         <tr key={s.marks_id}
                           className={`border-b hover:bg-gray-50 ${
-                            batches.find(b => b.batch_id === batch)?.status === "Completed" ||
-                            (userRole !== "coe" && s.entered_by && s.entered_by !== username)
+                            batchStatus === "Completed" ||
+                            (userRole === "faculty" && userLevel !== level)
                               ? "opacity-50 cursor-not-allowed"
                               : ""
                           }`}
                           title={
-                            batches.find(b => b.batch_id === batch)?.status === "Completed"
+                            batchStatus === "Completed"
                               ? "Batch completed"
-                              : (userRole !== "coe" && s.entered_by && s.entered_by !== username)
-                                ? "Locked: another faculty entered this"
+                              : (userRole === "faculty" && userLevel !== level)
+                                ? "Locked: Different level"
                                 : ""
                           }
                         >
@@ -679,6 +727,9 @@ export default function MarksEntry() {
                           )}
 
                           <td className="p-3 text-center">{s.semester}</td>
+                          {hasSections && (
+                            <td className="p-3 text-center">{s.section || "-"}</td>
+                          )}
                           {students.length > 0 &&
                           getMarksColumns(students[0].subject_type,students[0].exam_scheme).map((field) => (
 
@@ -686,14 +737,8 @@ export default function MarksEntry() {
                               <input
                                 type="number"
                                 disabled={
-                                  // Batch completed
-                                  batches.find(b => b.batch_id === batch)?.status === "Completed" ||
-
-                                  // Different faculty (not COE)
-                                  (userRole !== "coe" && s.entered_by && s.entered_by !== username) ||
-
-                                  // Different level faculty (IMPORTANT)
-                                  (userRole === "faculty" && s.level && s.level !== level)
+                                  batchStatus === "Completed" ||
+                                  (userRole === "faculty" && s.level !== level)
                                 }
                                 value={s[field] ?? ""}
                                 onChange={(e) =>{

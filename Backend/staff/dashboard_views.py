@@ -292,10 +292,16 @@ def get_notifications(request):
 
     if user.role == "coe":
         notifications = Notification.objects.order_by("-created_at")[:20]
+
     else:
-        notifications = Notification.objects.filter(
-            level=user.level
-        ).order_by("-created_at")[:20]
+        faculty = Faculty.objects.filter(user=user).first()
+
+        if faculty:
+            notifications = Notification.objects.filter(
+                level=faculty.level
+            ).order_by("-created_at")[:20]
+        else:
+            notifications = []
 
     data = [
         {

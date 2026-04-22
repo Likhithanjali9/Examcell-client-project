@@ -76,6 +76,7 @@ const handleFacultyLogin = async () => {
     localStorage.setItem("refresh", res.data.refresh);
     localStorage.setItem("role", res.data.role);
     localStorage.setItem("user_email", email);
+    localStorage.setItem("level", res.data.level);
 
     navigate("/dashboard", {replace:true}); // redirect 
   } catch (err) {
